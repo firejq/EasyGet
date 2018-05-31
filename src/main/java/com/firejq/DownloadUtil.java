@@ -1,8 +1,8 @@
 package com.firejq;
 
 import java.io.File;
+import java.io.FileWriter;
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -14,6 +14,12 @@ import java.net.URL;
  * @author <a href="mailto:firejq@outlook.com">firejq</a>
  */
 public class DownloadUtil {
+	// 进度记录文件后缀名
+	private static final String RECORD_FILE_SUFFIX = ".record";
+
+	// 临时下载文件后缀名
+	private static final String TEMP_FILE_SUFFIX = ".tmp";
+
 	// 目标资源的 URL
 	private String targetUrl;
 
@@ -31,26 +37,6 @@ public class DownloadUtil {
 
 	// 下载线程的对象数组
 	private DownloadThread [] downloadThreads;
-
-	public String getTargetUrl() {
-		return targetUrl;
-	}
-
-	public int getTargetSize() {
-		return targetSize;
-	}
-
-	public String getTargetName() {
-		return targetName;
-	}
-
-	public String getSavePath() {
-		return savePath;
-	}
-
-	public int getThreadNum() {
-		return threadNum;
-	}
 
 	public DownloadUtil(String targetUrl, String savePath, int threadNum) {
 		this.targetUrl = targetUrl;
@@ -95,24 +81,36 @@ public class DownloadUtil {
 			System.out.println("File size: " + this.targetSize / 1024 + " Kb");
 			conn.disconnect();
 
-			int currentPartSize = this.targetSize / this.threadNum + 1;
-			try (RandomAccessFile file = new RandomAccessFile(
-					this.savePath + this.targetName  + ".tmp",
-					"rw")) {
-				file.setLength(this.targetSize);
+			int eachPartSize = this.targetSize / this.threadNum + 1;
+			int [] completeRates = new int[this.threadNum];
+			// 检查是否是恢复下载
+			if (!this.isRestoration()) {
+				// 首次下载：先设置文件大小
+				try (RandomAccessFile file = new RandomAccessFile(
+						this.savePath + this.targetName
+								+ TEMP_FILE_SUFFIX,
+						"rw")) {
+					file.setLength(this.targetSize);
+				}
+			} else {
+				// 恢复下载：获取每个线程的已下载大小
+				completeRates = this.getRecordCompleteRate();
 			}
+
 			for (int i = 0; i < threadNum; i++) {
 				// 计算每个线程的下载的开始位置
-				int startPos = i * currentPartSize;
+				int startPos = i * eachPartSize + completeRates[i];
 				// 每个线程使用一个 RandomAccessFile 进行下载
 				RandomAccessFile currentPart = new RandomAccessFile(
-						this.savePath + this.targetName  + ".tmp",
+						this.savePath + this.targetName
+								+ TEMP_FILE_SUFFIX,
 						"rw");
 				// 定位该线程的下载位置
 				currentPart.seek(startPos);
 				// 创建下载线程
-				downloadThreads[i] = new DownloadThread(startPos,
-														currentPartSize,
+				downloadThreads[i] = new DownloadThread(targetUrl,
+														startPos,
+														eachPartSize,
 														currentPart);
 				// 启动下载线程
 				downloadThreads[i].start();
@@ -123,11 +121,27 @@ public class DownloadUtil {
 	}
 
 	/**
+	 * 检查是否是恢复下载
+	 * @return
+	 */
+	private boolean isRestoration() {
+		// todo 检查是否有.record 文件
+	}
+
+	/**
+	 * 获取记录文件中的每个线程的已下载大小
+	 * @return
+	 */
+	private int [] getRecordCompleteRate() {
+		// todo 逐行读取.record文件，封装成数组返回
+	}
+
+	/**
 	 * 获取下载的完成百分比
 	 * @return
 	 */
 	public double getCompleteRate() {
-		// 统计多条线程已经下载的总大小
+		// 统计多个线程已经下载的总大小
 		int sumSize = 0;
 		for (int i = 0; i < threadNum; i++) {
 			sumSize += downloadThreads[i].getFinishedSize();
@@ -138,68 +152,52 @@ public class DownloadUtil {
 	}
 
 	/**
-	 * 下载线程实现
+	 * 记录每个线程已下载的大小
+	 * @return
 	 */
-	private class DownloadThread extends Thread {
-		// 当前线程的下载位置
-		private int startPos;
-		// 定义当前线程负责下载的文件大小
-		private int currentPartSize;
-		// 当前线程需要下载的文件块
-		private RandomAccessFile currentPart;
-		// 定义已经该线程已下载的字节数
-		private int finishedSize;
-
-		public int getFinishedSize() {
-			return finishedSize;
-		}
-
-		DownloadThread(int startPos, int currentPartSize,
-					   RandomAccessFile currentPart) {
-			this.startPos = startPos;
-			this.currentPartSize = currentPartSize;
-			this.currentPart = currentPart;
-		}
-
-		@Override
-		public void run() {
-			try {
-				URL url = new URL(DownloadUtil.this.targetUrl);
-				HttpURLConnection conn = (HttpURLConnection)url
-						.openConnection();
-				conn.setConnectTimeout(5 * 1000);
-				conn.setRequestMethod("GET");
-				conn.setRequestProperty(
-						"Accept",
-						"image/gif, image/jpeg, image/pjpeg, image/pjpeg, " +
-								"application/x-shockwave-flash, " +
-								"application/xaml+xml, " +
-								"application/vnd.ms-xpsdocument, " +
-								"application/x-ms-xbap, " +
-								"application/x-ms-application, " +
-								"application/vnd.ms-excel, " +
-								"application/vnd.ms-powerpoint, " +
-								"application/msword, */*");
-				conn.setRequestProperty("Accept-Language", "zh-CN");
-				conn.setRequestProperty("Charset", "UTF-8");
-				InputStream inStream = conn.getInputStream();
-				// 跳过startPos个字节，表明该线程只下载自己负责哪部分文件。
-				inStream.skip(this.startPos);
-				byte[] buffer = new byte[1024];
-				int hasRead = 0;
-				// 读取网络数据，并写入本地文件
-				while (finishedSize < currentPartSize
-						&& (hasRead = inStream.read(buffer)) != -1) {
-					currentPart.write(buffer, 0, hasRead);
-					// 累计该线程下载的总大小
-					finishedSize += hasRead;
-				}
-				currentPart.close();
-				inStream.close();
-			} catch (Exception e) {
-				e.printStackTrace();
+	public void recordCompleteRate() {
+		// 将已经完成的大小记录到文件中
+		try (FileWriter fWriter = new FileWriter(
+				new File(this.savePath + this.targetName + RECORD_FILE_SUFFIX)))
+		{
+			for (int i = 0; i < threadNum; i++) {
+				fWriter.write(String.valueOf(downloadThreads[i]
+													 .getFinishedSize()) + "\n");
 			}
+		} catch (IOException e) {
+			e.printStackTrace();
 		}
+	}
+
+	/**
+	 * 删除临时下载文件的后缀名
+	 */
+	public void changeFileName() {
+		new File(this.getSavePath()
+						 + this.getTargetName()
+						 + TEMP_FILE_SUFFIX)
+				.renameTo(new File(this.getSavePath()
+										   + this.getTargetName()));
+	}
+
+	public String getTargetUrl() {
+		return targetUrl;
+	}
+
+	public int getTargetSize() {
+		return targetSize;
+	}
+
+	public String getTargetName() {
+		return targetName;
+	}
+
+	public String getSavePath() {
+		return savePath;
+	}
+
+	public int getThreadNum() {
+		return threadNum;
 	}
 
 	/**
@@ -207,31 +205,20 @@ public class DownloadUtil {
 	 * @param args 目标URL 本地路径 线程数
 	 */
 	public static void main(String [] args) {
-		// todo 参数校验
-		String target = args[0];
-		String path = args[1];
-		int threadNum = Integer.parseInt(args[2]);
-		// 初始化DownUtil对象
-		DownloadUtil downUtil = new DownloadUtil(target, path, threadNum);
-		// 开始下载
-		downUtil.download();
-		new Thread(() -> {
-			double processRate;
-			while((processRate = downUtil.getCompleteRate()) < 1) {
-				// 每隔0.1秒查询一次任务的完成进度
-				System.out.println("已完成：" + processRate * 100 + "%");
-				try {
-					Thread.sleep(1000);
-				} catch (Exception e) {
-					e.printStackTrace();
-				}
-			}
-			new File(downUtil.getSavePath()
-							 + downUtil.getTargetName()
-							 + ".tmp")
-					.renameTo(new File(downUtil.getSavePath()
-											   + downUtil.getTargetName()));
-		}).start();
+		int threadNum = 4; // 默认值为 4
+		if (args.length >= 3) {
+			threadNum = Integer.parseInt(args[2]);
+		}
+		if (args.length >= 2) {
+			String target = args[0];
+			String path = args[1];
+			// 初始化DownUtil对象
+			DownloadUtil downUtil = new DownloadUtil(target, path, threadNum);
+			// 开始下载
+			downUtil.download();
+			// 每隔0.1秒查询一次任务的完成进度，输出显示并记录
+			new CompleteRateThread(downUtil).start();
+		}
 	}
 }
 
