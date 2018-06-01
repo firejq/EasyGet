@@ -1,9 +1,6 @@
 package com.firejq;
 
-import java.io.File;
-import java.io.FileWriter;
-import java.io.IOException;
-import java.io.RandomAccessFile;
+import java.io.*;
 import java.net.HttpURLConnection;
 import java.net.URL;
 
@@ -125,15 +122,31 @@ public class DownloadUtil {
 	 * @return
 	 */
 	private boolean isRestoration() {
-		// todo 检查是否有.record 文件
+		File file = new File(this.savePath
+									 + this.targetName
+									 + RECORD_FILE_SUFFIX);
+		return file.exists();
 	}
 
 	/**
 	 * 获取记录文件中的每个线程的已下载大小
+	 * 逐行读取.record文件，封装成数组返回
 	 * @return
 	 */
 	private int [] getRecordCompleteRate() {
-		// todo 逐行读取.record文件，封装成数组返回
+		int [] rates = new int[this.threadNum];
+		try (BufferedReader fReader = new BufferedReader(
+				new FileReader(this.savePath + this.targetName
+									   + RECORD_FILE_SUFFIX))) {
+			String s;
+			int i = 0;
+			while ((s = fReader.readLine()) != null && i <= this.threadNum) {
+				rates[i++] = Integer.parseInt(s);
+			}
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
+		return rates;
 	}
 
 	/**
@@ -198,27 +211,6 @@ public class DownloadUtil {
 
 	public int getThreadNum() {
 		return threadNum;
-	}
-
-	/**
-	 * 程序入口
-	 * @param args 目标URL 本地路径 线程数
-	 */
-	public static void main(String [] args) {
-		int threadNum = 4; // 默认值为 4
-		if (args.length >= 3) {
-			threadNum = Integer.parseInt(args[2]);
-		}
-		if (args.length >= 2) {
-			String target = args[0];
-			String path = args[1];
-			// 初始化DownUtil对象
-			DownloadUtil downUtil = new DownloadUtil(target, path, threadNum);
-			// 开始下载
-			downUtil.download();
-			// 每隔0.1秒查询一次任务的完成进度，输出显示并记录
-			new CompleteRateThread(downUtil).start();
-		}
 	}
 }
 
